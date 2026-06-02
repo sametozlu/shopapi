@@ -123,3 +123,5 @@ docker compose up --build
 ## Güvenlik notu
 
 Üretimde `Jwt:Key`, connection string ve Redis şifrelerini ortam değişkeni veya secret store ile verin; repodaki örnek değerleri kullanmayın.
+
+_Last updated: 2026-06-02_
