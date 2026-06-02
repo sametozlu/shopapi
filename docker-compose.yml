@@ -1,0 +1,24 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__DefaultConnection: Data Source=/data/shopapi.db
+      Redis__Enabled: "true"
+      Redis__ConnectionString: redis:6379
+      Jwt__Key: shopapi-docker-secret-key-min-32-chars-long-2026
+    volumes:
+      - shopapi-data:/data
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  shopapi-data:

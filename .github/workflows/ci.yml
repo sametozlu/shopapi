@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore
+        run: dotnet restore ShopAPI.sln
+
+      - name: Build
+        run: dotnet build ShopAPI.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test ShopAPI.Tests/ShopAPI.Tests.csproj --configuration Release --no-build --verbosity normal
