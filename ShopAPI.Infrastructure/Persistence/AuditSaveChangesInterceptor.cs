@@ -13,7 +13,8 @@ public class AuditSaveChangesInterceptor : SaveChangesInterceptor
     {
         if (eventData.Context is AppDbContext dbContext)
         {
-            foreach (var entry in dbContext.ChangeTracker.Entries())
+            var entries = dbContext.ChangeTracker.Entries().ToList();
+            foreach (var entry in entries)
             {
                 if (entry.Entity is AuditLog or RefreshToken) continue;
                 if (entry.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)

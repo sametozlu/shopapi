@@ -5,7 +5,7 @@ ASP.NET Core 8 tabanlı, katmanlı mimari ile oluşturulmuş e-ticaret backend p
 ## Teknolojiler
 
 - ASP.NET Core Web API
-- Entity Framework Core (SQLite — varsayılan; SQL Server connection string ile değiştirilebilir)
+- Entity Framework Core (SQLite varsayılan, PostgreSQL ve SQL Server desteği)
 - JWT + refresh token
 - BCrypt password hashing
 - FluentValidation + AutoMapper
@@ -57,13 +57,31 @@ Login sırasında backend `refreshToken` da döner ve frontend onu `localStorage
 
 | Bölüm | Açıklama |
 |--------|----------|
-| `ConnectionStrings:DefaultConnection` | SQLite: `Data Source=shopapi.db` |
+| `ConnectionStrings:DefaultConnection` | SQLite: `Data Source=shopapi.db` veya PostgreSQL: `Host=...` |
 | `Jwt` | Issuer, audience, key, access/refresh süreleri |
 | `Redis:Enabled` | `true` → Redis; `false` → bellek içi cache |
 | `Redis:ConnectionString` | Örn. `localhost:6379` |
 | `RateLimiting` | Pencere ve istek limiti |
 | `StockAlert` | Arka plan işi eşiği ve aralık |
+| `Payments` | `Provider` (`mock` veya `stripe`) ve webhook secret |
+| `Stripe` | `SecretKey`, `FrontendUrl` (ödeme dönüş adresi) |
 | `Serilog` | Minimum seviye vb. |
+
+Stripe Checkout (kart ekranı) için:
+
+```json
+"Payments": {
+  "Provider": "stripe"
+},
+"Stripe": {
+  "SecretKey": "sk_test_...",
+  "FrontendUrl": "http://localhost:5173"
+}
+```
+
+Akış: `POST /api/orders` → `POST /api/orders/{id}/pay` → Stripe Checkout sayfasına yönlendirme → dönüşte `POST /api/orders/{id}/confirm-payment?sessionId=...`
+
+Mock modda (`Provider: mock`) ödeme ekranı açılmaz; sipariş anında tamamlanır.
 
 ## Seed veriler
 
@@ -91,6 +109,12 @@ Login/register yanıtı: `token`, `refreshToken`, `email`, `role`, `expiresAt`.
 - `api/categories`, `api/products` (arama, filtre, sıralama, sayfalama)
 - `api/cart`, `api/orders`
 - `GET /api/admin/audit-logs` — yalnızca Admin rolü
+- `POST /api/orders/{id}/pay` — mock: anında ödeme; stripe: `checkoutUrl` döner
+- `POST /api/orders/{id}/confirm-payment` — Stripe dönüşünde ödemeyi doğrular
+- `POST /api/orders/{id}/cancel` — kullanıcı sipariş iptali
+- `api/addresses` — kullanıcı adres CRUD
+- `api/coupons` — kupon doğrulama/yönetim
+- `api/products/{id}/variants` — SKU/varyant yönetimi
 
 ### Profesyonel özellikler
 
@@ -99,6 +123,19 @@ Login/register yanıtı: `token`, `refreshToken`, `email`, `role`, `expiresAt`.
 - **Audit log:** `SaveChanges` öncesi değişiklikler `AuditLogs` tablosuna yazılır
 - **Stok alarmı:** `StockAlertBackgroundService` eşik altı stokları Serilog ile yazar
 - **Global hata:** Exception middleware
+- **Sipariş akışı:** `Pending -> Paid -> Shipped / Cancelled`
+- **Ödeme provider seçimi:** `MockPaymentGateway` veya `StripePaymentGateway`
+- **Checkout:** adres + kargo metodu + kupon kodu ile sipariş oluşturma
+- **DTO response modeli:** ürün, sepet ve sipariş yanıtları entity yerine DTO döner
+
+## Migration komutları
+
+```powershell
+dotnet ef migrations add <Name> --project ShopAPI.Infrastructure --startup-project ShopAPI.API --output-dir Persistence/Migrations
+dotnet ef database update --project ShopAPI.Infrastructure --startup-project ShopAPI.API
+```
+
+Uygulama başlangıcında otomatik olarak `Database.Migrate()` çalışır.
 
 ## Testler
 
@@ -114,7 +151,7 @@ docker compose up --build
 
 - API: `http://localhost:8080`
 - Redis: `6379`
-- SQLite volume: `shopapi-data`
+- PostgreSQL: `5432`
 
 ## CI/CD
 

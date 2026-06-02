@@ -4,11 +4,13 @@ using FluentValidation;
 using FluentValidation.AspNetCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Serilog;
 using ShopAPI.API.Middleware;
 using ShopAPI.Application;
 using ShopAPI.Infrastructure;
+using System.Text.Json.Serialization;
 
 Log.Logger = new LoggerConfiguration()
     .WriteTo.Console()
@@ -23,7 +25,11 @@ try
         .WriteTo.Console()
         .WriteTo.File("logs/shopapi-.log", rollingInterval: RollingInterval.Day));
 
-    builder.Services.AddControllers();
+    builder.Services.AddControllers()
+        .AddJsonOptions(options =>
+        {
+            options.JsonSerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles;
+        });
     builder.Services.AddEndpointsApiExplorer();
     builder.Services.AddSwaggerGen();
     builder.Services.AddApplication();
@@ -94,7 +100,7 @@ try
     using (var scope = app.Services.CreateScope())
     {
         var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        await dbContext.Database.EnsureCreatedAsync();
+        await dbContext.Database.MigrateAsync();
         await DataSeeder.SeedAsync(dbContext);
     }
 

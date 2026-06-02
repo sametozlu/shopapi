@@ -17,7 +17,7 @@ public class ProductsController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<ActionResult<PagedResult<Product>>> Get(
+    public async Task<ActionResult<PagedResult<ProductDto>>> Get(
         [FromQuery] string? search,
         [FromQuery] Guid? categoryId,
         [FromQuery] decimal? minPrice,
@@ -34,7 +34,7 @@ public class ProductsController : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
-    public async Task<ActionResult<Product>> GetById(Guid id)
+    public async Task<ActionResult<ProductDto>> GetById(Guid id)
     {
         var product = await _productService.GetByIdAsync(id);
         return product is null ? NotFound() : Ok(product);
@@ -42,7 +42,7 @@ public class ProductsController : ControllerBase
 
     [Authorize(Roles = nameof(UserRole.Admin))]
     [HttpPost]
-    public async Task<ActionResult<Product>> Create(ProductRequest request)
+    public async Task<ActionResult<ProductDto>> Create(ProductRequest request)
     {
         var product = await _productService.CreateAsync(request);
         return product is null ? BadRequest(new { message = "Category not found." }) : Ok(product);
@@ -50,7 +50,7 @@ public class ProductsController : ControllerBase
 
     [Authorize(Roles = nameof(UserRole.Admin))]
     [HttpPut("{id:guid}")]
-    public async Task<ActionResult<Product>> Update(Guid id, ProductRequest request)
+    public async Task<ActionResult<ProductDto>> Update(Guid id, ProductRequest request)
     {
         var product = await _productService.UpdateAsync(id, request);
         return product is null ? NotFound() : Ok(product);
@@ -62,5 +62,25 @@ public class ProductsController : ControllerBase
     {
         var deleted = await _productService.DeleteAsync(id);
         return deleted ? NoContent() : NotFound();
+    }
+
+    [HttpGet("{id:guid}/variants")]
+    public async Task<ActionResult<List<ProductVariantDto>>> GetVariants(Guid id) =>
+        Ok(await _productService.GetVariantsAsync(id));
+
+    [Authorize(Roles = nameof(UserRole.Admin))]
+    [HttpPost("{id:guid}/variants")]
+    public async Task<ActionResult<ProductVariantDto>> CreateVariant(Guid id, ProductVariantRequest request)
+    {
+        var variant = await _productService.CreateVariantAsync(id, request);
+        return variant is null ? NotFound(new { message = "Product not found." }) : Ok(variant);
+    }
+
+    [Authorize(Roles = nameof(UserRole.Admin))]
+    [HttpPut("{id:guid}/variants/{variantId:guid}")]
+    public async Task<ActionResult<ProductVariantDto>> UpdateVariant(Guid id, Guid variantId, ProductVariantRequest request)
+    {
+        var variant = await _productService.UpdateVariantAsync(id, variantId, request);
+        return variant is null ? NotFound() : Ok(variant);
     }
 }

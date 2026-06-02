@@ -27,27 +27,27 @@ const categoryTr = {
   home: 'Ev & Yaşam',
 }
 
-const translationCache = new Map()
-
-async function translateEnToTr(text) {
-  if (!text?.trim()) return text
-  const key = text.slice(0, 200)
-  if (translationCache.has(key)) return translationCache.get(key)
-
-  try {
-    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text.slice(0, 500))}&langpair=en|tr`
-    const res = await fetch(url)
-    const data = await res.json()
-    const translated = data.responseData?.translatedText ?? text
-    translationCache.set(key, translated)
-    return translated
-  } catch {
-    return text
-  }
-}
-
-function delay(ms) {
-  return new Promise((r) => setTimeout(r, ms))
+const productTitleTr = {
+  'Wireless Mouse': 'Kablosuz Mouse',
+  'Mechanical Keyboard': 'Mekanik Klavye',
+  'Gaming Headset': 'Oyuncu Kulaklığı',
+  'Desk Lamp': 'Masa Lambası',
+  '27" 4K Monitor': '27" 4K Monitör',
+  'USB-C Hub': 'USB-C Çoklayıcı',
+  'Portable SSD 1TB': 'Taşınabilir SSD 1TB',
+  'Ergonomic Chair': 'Ergonomik Sandalye',
+  'Coffee Maker': 'Kahve Makinesi',
+  'Air Fryer': 'Air Fryer',
+  'Smart Bulb': 'Akıllı Ampul',
+  'Gaming Mousepad': 'Oyuncu Mousepad',
+  'Webcam Full HD': 'Webcam Full HD',
+  'Bluetooth Speaker': 'Bluetooth Hoparlör',
+  'Noise Cancelling Earbuds': 'Gürültü Engelleyen Kulaklık',
+  'Office Desk': 'Ofis Masası',
+  'Robot Vacuum': 'Robot Süpürge',
+  'Smart Plug': 'Akıllı Priz',
+  'Mechanical Number Pad': 'Mekanik Numpad',
+  'Laptop Stand': 'Laptop Standı',
 }
 
 export function localizeCategory(category, lang) {
@@ -67,20 +67,10 @@ export async function localizeProducts(products, lang) {
     }))
   }
 
-  const result = []
-  for (let i = 0; i < products.length; i++) {
-    const p = products[i]
-    const displayTitle = await translateEnToTr(p.title)
-
-    result.push({
+  return products.map((p) => ({
       ...p,
-      displayTitle,
+      displayTitle: productTitleTr[p.title] ?? p.title,
       displayDescription: descTr,
       displayCategory: localizeCategory(p.category, 'tr'),
-    })
-
-    if (i % 4 === 3) await delay(80)
-  }
-
-  return result
+    }))
 }

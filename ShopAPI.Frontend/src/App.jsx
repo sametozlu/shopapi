@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
+import { Link, Navigate, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom'
 import { LANG_KEY, formatPrice, i18n } from './i18n'
 import { localizeCategory, localizeProducts } from './productLocale'
 
-const PRODUCT_API = 'https://dummyjson.com/products?limit=48'
-const CART_KEY = 'shopapi-modern-cart'
+const API_BASE = 'http://localhost:5095'
 const TOKEN_KEY = 'shopapi-auth-token'
 const REFRESH_TOKEN_KEY = 'shopapi-refresh-token'
 
 function App() {
   const [lang, setLang] = useState(() => localStorage.getItem(LANG_KEY) ?? 'tr')
   const [token, setToken] = useState(localStorage.getItem(TOKEN_KEY) ?? '')
+  const [bootstrapping, setBootstrapping] = useState(true)
   const t = i18n[lang]
 
   function changeLang(next) {
@@ -30,6 +30,42 @@ function App() {
     localStorage.removeItem(REFRESH_TOKEN_KEY)
   }
 
+  useEffect(() => {
+    async function bootstrapSession() {
+      if (token) {
+        setBootstrapping(false)
+        return
+      }
+
+      const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY)
+      if (!refreshToken) {
+        setBootstrapping(false)
+        return
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/api/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refreshToken }),
+        })
+        if (!response.ok) throw new Error('refresh failed')
+        const data = await response.json()
+        onLogin(data.token, data.refreshToken)
+      } catch {
+        onLogout()
+      } finally {
+        setBootstrapping(false)
+      }
+    }
+
+    bootstrapSession()
+  }, [])
+
+  if (bootstrapping) {
+    return <p className="message">{t.loading}</p>
+  }
+
   return (
     <Routes>
       <Route
@@ -46,7 +82,7 @@ function App() {
         path="/"
         element={
           token ? (
-            <StorePage lang={lang} setLang={changeLang} t={t} onLogout={onLogout} />
+            <StorePage lang={lang} setLang={changeLang} t={t} token={token} onLogin={onLogin} onLogout={onLogout} />
           ) : (
             <Navigate to="/login" replace />
           )
@@ -81,7 +117,7 @@ function LoginPage({ lang, setLang, t, onLogin }) {
     setError('')
     setLoading(true)
     try {
-      const response = await fetch('http://localhost:5095/api/Auth/login', {
+      const response = await fetch(`${API_BASE}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
@@ -126,8 +162,56 @@ function LoginPage({ lang, setLang, t, onLogin }) {
   )
 }
 
-function StorePage({ lang, setLang, t, onLogout }) {
+function mapApiProduct(product) {
+  return {
+    id: product.id,
+    title: product.name,
+    description: `Stock: ${product.stock}`,
+    category: product.category?.slug ?? 'general',
+    categoryName: product.category?.name ?? 'General',
+    price: Number(product.price ?? 0),
+    rating: Number((4.2 + ((product.stock ?? 0) % 8) / 10).toFixed(1)),
+    stock: product.stock ?? 0,
+    thumbnail: `https://picsum.photos/seed/${product.id}/480/320`,
+  }
+}
+
+async function apiFetch(path, { method = 'GET', token, body, onLogin, onLogout } = {}) {
+  const headers = {}
+  if (token) headers.Authorization = `Bearer ${token}`
+  if (body !== undefined) headers['Content-Type'] = 'application/json'
+
+  const call = async (accessToken) =>
+    fetch(`${API_BASE}${path}`, {
+      method,
+      headers: accessToken ? { ...headers, Authorization: `Bearer ${accessToken}` } : headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    })
+
+  let response = await call(token)
+  if (response.status !== 401 || !localStorage.getItem(REFRESH_TOKEN_KEY)) return response
+
+  try {
+    const refreshResponse = await fetch(`${API_BASE}/api/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken: localStorage.getItem(REFRESH_TOKEN_KEY) }),
+    })
+    if (!refreshResponse.ok) throw new Error('refresh failed')
+
+    const refreshData = await refreshResponse.json()
+    onLogin(refreshData.token, refreshData.refreshToken)
+    response = await call(refreshData.token)
+    return response
+  } catch {
+    onLogout()
+    throw new Error('session expired')
+  }
+}
+
+function StorePage({ lang, setLang, t, token, onLogin, onLogout }) {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [rawProducts, setRawProducts] = useState([])
   const [displayProducts, setDisplayProducts] = useState([])
   const [categories, setCategories] = useState([])
@@ -137,34 +221,78 @@ function StorePage({ lang, setLang, t, onLogout }) {
   const [loading, setLoading] = useState(true)
   const [translating, setTranslating] = useState(false)
   const [error, setError] = useState('')
-  const [cart, setCart] = useState(() => {
-    const saved = localStorage.getItem(CART_KEY)
-    return saved ? JSON.parse(saved) : []
-  })
+  const [orderMessage, setOrderMessage] = useState('')
+  const [checkoutBusy, setCheckoutBusy] = useState(false)
+  const [completedOrderId, setCompletedOrderId] = useState(null)
+  const [cartItems, setCartItems] = useState([])
+  const [addresses, setAddresses] = useState([])
 
   useEffect(() => {
-    localStorage.setItem(CART_KEY, JSON.stringify(cart))
-  }, [cart])
-
-  useEffect(() => {
-    async function fetchProducts() {
+    async function fetchProductsAndCart() {
       setLoading(true)
       setError('')
       try {
-        const response = await fetch(PRODUCT_API)
-        if (!response.ok) throw new Error('load failed')
-        const data = await response.json()
-        const list = data.products ?? []
+        const [productsResponse, cartResponse, addressesResponse] = await Promise.all([
+          apiFetch('/api/products?page=1&pageSize=100&isActive=true', { token, onLogin, onLogout }),
+          apiFetch('/api/cart', { token, onLogin, onLogout }),
+          apiFetch('/api/addresses', { token, onLogin, onLogout }),
+        ])
+
+        if (!productsResponse.ok || !cartResponse.ok || !addressesResponse.ok) throw new Error('load failed')
+
+        const productsData = await productsResponse.json()
+        const cartData = await cartResponse.json()
+        const addressesData = await addressesResponse.json()
+        const list = (productsData.items ?? []).map(mapApiProduct)
+
         setRawProducts(list)
         setCategories([...new Set(list.map((p) => p.category))])
+        setCartItems(cartData ?? [])
+        setAddresses(addressesData ?? [])
       } catch {
         setError(t.loadError)
       } finally {
         setLoading(false)
       }
     }
-    fetchProducts()
-  }, [])
+    fetchProductsAndCart()
+  }, [token, lang])
+
+  useEffect(() => {
+    const paymentStatus = searchParams.get('payment')
+    const orderId = searchParams.get('orderId')
+    const sessionId = searchParams.get('session_id')
+    if (!paymentStatus || !orderId) return
+
+    async function handlePaymentReturn() {
+      if (paymentStatus === 'success' && sessionId) {
+        setCheckoutBusy(true)
+        setOrderMessage(t.paymentConfirming)
+        try {
+          const confirmResponse = await apiFetch(
+            `/api/orders/${orderId}/confirm-payment?sessionId=${encodeURIComponent(sessionId)}`,
+            { method: 'POST', token, onLogin, onLogout }
+          )
+          if (!confirmResponse.ok) throw new Error('confirm failed')
+          setCompletedOrderId(orderId)
+          await reloadCart()
+        } catch {
+          setOrderMessage(t.checkoutError)
+        } finally {
+          setCheckoutBusy(false)
+          setSearchParams({}, { replace: true })
+        }
+        return
+      }
+
+      if (paymentStatus === 'cancel') {
+        setOrderMessage(t.paymentCancelled)
+        setSearchParams({}, { replace: true })
+      }
+    }
+
+    handlePaymentReturn()
+  }, [searchParams, token])
 
   useEffect(() => {
     if (!rawProducts.length) return
@@ -213,44 +341,140 @@ function StorePage({ lang, setLang, t, onLogout }) {
     return list
   }, [displayProducts, searchText, selectedCategory, sort])
 
-  const cartItems = useMemo(
-    () =>
-      cart
-        .map((item) => {
-          const product = displayProducts.find((p) => p.id === item.productId)
-          return product ? { ...item, product } : null
-        })
-        .filter(Boolean),
-    [cart, displayProducts]
-  )
-
   const cartCount = cartItems.reduce((sum, item) => sum + item.quantity, 0)
-  const cartTotal = cartItems.reduce((sum, item) => sum + item.quantity * item.product.price, 0)
+  const cartTotal = cartItems.reduce((sum, item) => sum + item.quantity * Number(item.product?.price ?? 0), 0)
 
-  function addToCart(productId) {
-    setCart((prev) => {
-      const found = prev.find((item) => item.productId === productId)
-      if (found) {
-        return prev.map((item) =>
-          item.productId === productId ? { ...item, quantity: item.quantity + 1 } : item
-        )
-      }
-      return [...prev, { productId, quantity: 1 }]
-    })
+  async function reloadCart() {
+    const response = await apiFetch('/api/cart', { token, onLogin, onLogout })
+    if (!response.ok) throw new Error('cart load failed')
+    setCartItems(await response.json())
   }
 
-  function changeQuantity(productId, nextQuantity) {
-    if (nextQuantity <= 0) {
-      setCart((prev) => prev.filter((item) => item.productId !== productId))
+  async function addToCart(productId) {
+    dismissOrderSuccess()
+    const response = await apiFetch('/api/cart/items', {
+      method: 'POST',
+      token,
+      body: { productId, quantity: 1 },
+      onLogin,
+      onLogout,
+    })
+    if (!response.ok) {
+      setError(t.cartActionError)
       return
     }
-    setCart((prev) =>
-      prev.map((item) => (item.productId === productId ? { ...item, quantity: nextQuantity } : item))
-    )
+    await reloadCart()
   }
 
-  function clearCart() {
-    setCart([])
+  async function changeQuantity(productId, nextQuantity) {
+    setOrderMessage('')
+    if (nextQuantity <= 0) {
+      const response = await apiFetch(`/api/cart/items/${productId}`, {
+        method: 'DELETE',
+        token,
+        onLogin,
+        onLogout,
+      })
+      if (!response.ok) setError(t.cartActionError)
+      await reloadCart()
+      return
+    }
+
+    const response = await apiFetch(`/api/cart/items/${productId}`, {
+      method: 'PUT',
+      token,
+      body: { quantity: nextQuantity },
+      onLogin,
+      onLogout,
+    })
+    if (!response.ok) {
+      setError(t.cartActionError)
+      return
+    }
+    await reloadCart()
+  }
+
+  async function clearCart() {
+    for (const item of cartItems) {
+      // Sequential deletes keep API state predictable for demo flow.
+      await apiFetch(`/api/cart/items/${item.productId}`, {
+        method: 'DELETE',
+        token,
+        onLogin,
+        onLogout,
+      })
+    }
+    await reloadCart()
+  }
+
+  async function checkout() {
+    if (checkoutBusy || !cartItems.length) return
+    setOrderMessage('')
+    setCompletedOrderId(null)
+    setCheckoutBusy(true)
+    try {
+      const selectedAddress = addresses.find((x) => x.isDefault) ?? addresses[0]
+      if (!selectedAddress) {
+        setOrderMessage(t.addressMissing)
+        return
+      }
+      const createResponse = await apiFetch('/api/orders', {
+        method: 'POST',
+        token,
+        body: {
+          shippingAddressId: selectedAddress.id,
+          shippingMethod: 0,
+          couponCode: 'WELCOME10',
+        },
+        onLogin,
+        onLogout,
+      })
+      if (!createResponse.ok) throw new Error('create order failed')
+      const order = await createResponse.json()
+
+      const payResponse = await apiFetch(`/api/orders/${order.id}/pay`, {
+        method: 'POST',
+        token,
+        onLogin,
+        onLogout,
+      })
+      if (!payResponse.ok) {
+        const errBody = await payResponse.json().catch(() => ({}))
+        throw new Error(errBody.message ?? 'pay order failed')
+      }
+      const payResult = await payResponse.json()
+
+      if (payResult.mode === 'stripe_checkout' && payResult.checkoutUrl) {
+        window.location.href = payResult.checkoutUrl
+        return
+      }
+
+      setCompletedOrderId(order.id)
+      await Promise.all([
+        reloadCart(),
+        (async () => {
+          const productsResponse = await apiFetch('/api/products?page=1&pageSize=100&isActive=true', {
+            token,
+            onLogin,
+            onLogout,
+          })
+          if (productsResponse.ok) {
+            const productsData = await productsResponse.json()
+            setRawProducts((productsData.items ?? []).map(mapApiProduct))
+          }
+        })(),
+      ])
+    } catch {
+      setOrderMessage(t.checkoutError)
+      setCompletedOrderId(null)
+    } finally {
+      setCheckoutBusy(false)
+    }
+  }
+
+  function dismissOrderSuccess() {
+    setCompletedOrderId(null)
+    setOrderMessage('')
   }
 
   function logout() {
@@ -327,7 +551,7 @@ function StorePage({ lang, setLang, t, onLogout }) {
                   <img src={product.thumbnail} alt={product.displayTitle ?? product.title} />
                 </div>
                 <div className="product-info">
-                  <p className="category">{product.displayCategory ?? product.category}</p>
+                  <p className="category">{product.displayCategory ?? product.categoryName ?? product.category}</p>
                   <h3>{product.displayTitle ?? product.title}</h3>
                   <p className="desc">{product.displayDescription ?? product.description}</p>
                   <div className="meta">
@@ -347,14 +571,24 @@ function StorePage({ lang, setLang, t, onLogout }) {
 
         <aside className="cart-panel">
           <h2>{t.cart}</h2>
-          {cartItems.length === 0 && <p className="muted">{t.cartEmpty}</p>}
+          {completedOrderId ? (
+            <div className="order-success" role="status">
+              <p className="order-success-title">{t.checkoutSuccess(completedOrderId)}</p>
+              <p className="muted">{t.cartAfterOrder}</p>
+              <button type="button" className="btn-ghost order-success-dismiss" onClick={dismissOrderSuccess}>
+                {t.dismissOk}
+              </button>
+            </div>
+          ) : (
+            cartItems.length === 0 && <p className="muted">{t.cartEmpty}</p>
+          )}
           <ul>
             {cartItems.map((item) => (
               <li key={item.productId}>
                 <div>
-                  <strong>{item.product.displayTitle ?? item.product.title}</strong>
+                  <strong>{item.product?.name}</strong>
                   <p>
-                    {formatPrice(item.product.price, lang)} × {item.quantity}
+                    {formatPrice(Number(item.product?.price ?? 0), lang)} × {item.quantity}
                   </p>
                 </div>
                 <div className="qty">
@@ -369,11 +603,27 @@ function StorePage({ lang, setLang, t, onLogout }) {
               </li>
             ))}
           </ul>
-          <div className="checkout">
-            <p>{t.total}</p>
-            <strong>{formatPrice(cartTotal, lang)}</strong>
-          </div>
-          <button type="button" className="btn-secondary" onClick={clearCart} disabled={!cartItems.length}>
+          {cartItems.length > 0 && (
+            <div className="checkout">
+              <p>{t.total}</p>
+              <strong>{formatPrice(cartTotal, lang)}</strong>
+            </div>
+          )}
+          {!!orderMessage && <p className="message error">{orderMessage}</p>}
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={checkout}
+            disabled={!cartItems.length || checkoutBusy || !!completedOrderId}
+          >
+            {checkoutBusy ? t.checkoutProcessing : t.checkout}
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={clearCart}
+            disabled={!cartItems.length || checkoutBusy}
+          >
             {t.clear}
           </button>
         </aside>

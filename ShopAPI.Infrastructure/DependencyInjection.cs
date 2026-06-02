@@ -21,9 +21,17 @@ public static class DependencyInjection
         services.AddDbContext<AppDbContext>((sp, options) =>
         {
             if (connectionString.Contains("Data Source=", StringComparison.OrdinalIgnoreCase))
+            {
                 options.UseSqlite(connectionString);
+            }
+            else if (connectionString.Contains("Host=", StringComparison.OrdinalIgnoreCase))
+            {
+                options.UseNpgsql(connectionString);
+            }
             else
+            {
                 options.UseSqlServer(connectionString);
+            }
 
             options.AddInterceptors(sp.GetRequiredService<AuditSaveChangesInterceptor>());
         });
@@ -54,8 +62,18 @@ public static class DependencyInjection
 
         services.AddScoped<OrderService>();
         services.AddScoped<IOrderService>(sp => sp.GetRequiredService<OrderService>());
+        var paymentProvider = configuration["Payments:Provider"]?.ToLowerInvariant() ?? "mock";
+        if (paymentProvider == "stripe")
+            services.AddScoped<IPaymentGateway, StripePaymentGateway>();
+        else
+            services.AddScoped<IPaymentGateway, MockPaymentGateway>();
+        services.AddScoped<AddressService>();
+        services.AddScoped<IAddressService>(sp => sp.GetRequiredService<AddressService>());
+        services.AddScoped<CouponService>();
+        services.AddScoped<ICouponService>(sp => sp.GetRequiredService<CouponService>());
 
         services.AddHostedService<StockAlertBackgroundService>();
+        services.AddHostedService<OutboxDispatcherBackgroundService>();
 
         return services;
     }

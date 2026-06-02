@@ -3,7 +3,7 @@ using ShopAPI.Domain;
 
 namespace ShopAPI.Application;
 
-public class ProductDto
+public class ProductListItemDto
 {
     public Guid Id { get; set; }
     public string Name { get; set; } = string.Empty;
@@ -18,7 +18,7 @@ public class MappingProfile : Profile
 {
     public MappingProfile()
     {
-        CreateMap<Product, ProductDto>()
+        CreateMap<Product, ProductListItemDto>()
             .ForMember(d => d.CategoryName, o => o.MapFrom(s => s.Category != null ? s.Category.Name : null));
     }
 }

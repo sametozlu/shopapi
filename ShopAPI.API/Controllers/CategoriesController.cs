@@ -17,21 +17,21 @@ public class CategoriesController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<ActionResult<List<Category>>> Get()
+    public async Task<ActionResult<List<CategoryDto>>> Get()
     {
         return Ok(await _categoryService.GetAllAsync());
     }
 
     [Authorize(Roles = nameof(UserRole.Admin))]
     [HttpPost]
-    public async Task<ActionResult<Category>> Create(CategoryRequest request)
+    public async Task<ActionResult<CategoryDto>> Create(CategoryRequest request)
     {
         return Ok(await _categoryService.CreateAsync(request));
     }
 
     [Authorize(Roles = nameof(UserRole.Admin))]
     [HttpPut("{id:guid}")]
-    public async Task<ActionResult<Category>> Update(Guid id, CategoryRequest request)
+    public async Task<ActionResult<CategoryDto>> Update(Guid id, CategoryRequest request)
     {
         var category = await _categoryService.UpdateAsync(id, request);
         return category is null ? NotFound() : Ok(category);
