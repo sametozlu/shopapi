@@ -457,6 +457,36 @@ button {
   color: #991b1b;
 }
 
+.admin-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.admin-tabs button {
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.admin-tabs button.active {
+  background: var(--primary-soft);
+  border-color: #fed7aa;
+  color: #9a3412;
+  font-weight: 600;
+}
+
+.admin-inline-input {
+  width: 90px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
 .content {
   margin-top: 20px;
   display: grid;

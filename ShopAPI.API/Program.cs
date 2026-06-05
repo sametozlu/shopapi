@@ -6,6 +6,8 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
 using Serilog;
 using ShopAPI.API.Middleware;
 using ShopAPI.Application;
@@ -81,6 +83,14 @@ try
     builder.Services.AddHealthChecks()
         .AddDbContextCheck<AppDbContext>("database");
 
+    builder.Services.AddOpenTelemetry()
+        .ConfigureResource(resource => resource.AddService("ShopAPI"))
+        .WithMetrics(metrics => metrics
+            .AddAspNetCoreInstrumentation()
+            .AddHttpClientInstrumentation()
+            .AddRuntimeInstrumentation()
+            .AddPrometheusExporter());
+
     var app = builder.Build();
 
     app.UseSerilogRequestLogging();
@@ -99,6 +109,7 @@ try
     app.UseAuthorization();
     app.MapGet("/", () => Results.Redirect("/swagger"));
     app.MapHealthChecks("/health");
+    app.MapPrometheusScrapingEndpoint("/metrics");
     app.MapControllers().RequireRateLimiting("api");
 
     if (!app.Environment.IsEnvironment("Testing"))
