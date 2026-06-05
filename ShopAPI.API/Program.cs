@@ -78,6 +78,9 @@ try
 
     builder.Services.AddAuthorization();
 
+    builder.Services.AddHealthChecks()
+        .AddDbContextCheck<AppDbContext>("database");
+
     var app = builder.Build();
 
     app.UseSerilogRequestLogging();
@@ -95,10 +98,12 @@ try
     app.UseAuthentication();
     app.UseAuthorization();
     app.MapGet("/", () => Results.Redirect("/swagger"));
+    app.MapHealthChecks("/health");
     app.MapControllers().RequireRateLimiting("api");
 
-    using (var scope = app.Services.CreateScope())
+    if (!app.Environment.IsEnvironment("Testing"))
     {
+        using var scope = app.Services.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         await dbContext.Database.MigrateAsync();
         await DataSeeder.SeedAsync(dbContext);
@@ -115,3 +120,5 @@ finally
 {
     Log.CloseAndFlush();
 }
+
+public partial class Program;

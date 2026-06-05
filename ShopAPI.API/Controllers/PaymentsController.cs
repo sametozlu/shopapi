@@ -26,4 +26,39 @@ public class PaymentsController : ControllerBase
         var order = await _orderService.HandlePaymentWebhookAsync(request);
         return order is null ? NotFound(new { message = "Payment transaction not found." }) : Ok(order);
     }
+
+    [HttpPost("stripe-webhook")]
+    public async Task<IActionResult> StripeWebhook()
+    {
+        var webhookSecret = _configuration["Stripe:WebhookSecret"];
+        if (string.IsNullOrWhiteSpace(webhookSecret))
+            return BadRequest(new { message = "Stripe webhook secret is not configured." });
+
+        var json = await new StreamReader(HttpContext.Request.Body).ReadToEndAsync();
+        var signature = Request.Headers["Stripe-Signature"].ToString();
+        if (string.IsNullOrWhiteSpace(signature))
+            return BadRequest(new { message = "Missing Stripe-Signature header." });
+
+        Stripe.Event stripeEvent;
+        try
+        {
+            stripeEvent = Stripe.EventUtility.ConstructEvent(json, signature, webhookSecret);
+        }
+        catch (Stripe.StripeException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+
+        if (stripeEvent.Type == "checkout.session.completed")
+        {
+            var session = stripeEvent.Data.Object as Stripe.Checkout.Session;
+            if (session is null || string.IsNullOrWhiteSpace(session.Id))
+                return BadRequest(new { message = "Invalid checkout session payload." });
+
+            var order = await _orderService.ConfirmStripeWebhookAsync(session.Id);
+            return order is null ? NotFound(new { message = "Order not found or not confirmable." }) : Ok(order);
+        }
+
+        return Ok(new { received = true, type = stripeEvent.Type });
+    }
 }

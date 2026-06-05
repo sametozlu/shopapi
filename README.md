@@ -13,11 +13,11 @@ ASP.NET Core 8 tabanlı, katmanlı mimari ile oluşturulmuş e-ticaret backend p
 - Redis veya bellek içi dağıtık önbellek
 - Rate limiting
 - Audit log (EF interceptor)
-- Arka plan işi (düşük stok uyarısı)
+- Arka plan işi (düşük stok uyarısı, outbox dispatcher)
 - Swagger/OpenAPI
-- xUnit + FluentAssertions
+- xUnit + FluentAssertions (validator + integration test)
 - Docker + docker-compose
-- GitHub Actions CI
+- GitHub Actions CI (backend, frontend, docker)
 
 ## Proje yapısı
 
@@ -26,9 +26,9 @@ ASP.NET Core 8 tabanlı, katmanlı mimari ile oluşturulmuş e-ticaret backend p
 | `ShopAPI.API` | Controller, middleware, Program.cs |
 | `ShopAPI.Application` | DTO, contract, validator, AutoMapper |
 | `ShopAPI.Domain` | Entity ve enumlar |
-| `ShopAPI.Infrastructure` | EF Core, servisler, cache, audit, background job |
-| `ShopAPI.Tests` | Validator birim testleri |
-| `ShopAPI.Frontend` | React vitrin (DummyJSON ürünleri; giriş ShopAPI’ye) |
+| `ShopAPI.Infrastructure` | EF Core, servisler (`Services/`), cache, audit, background job |
+| `ShopAPI.Tests` | Validator + integration testleri |
+| `ShopAPI.Frontend` | React vitrin (gerçek API; admin panel dahil) |
 
 ## Yerel çalıştırma
 
@@ -38,7 +38,8 @@ dotnet build ShopAPI.sln -c Release
 dotnet run --project ShopAPI.API
 ```
 
-- Swagger: `http://localhost:5095/swagger` (port `launchSettings.json`’a göre değişebilir)
+- Swagger: `http://localhost:5095/swagger`
+- Health: `http://localhost:5095/health`
 - Log dosyaları: `ShopAPI.API/logs/shopapi-*.log`
 
 ### Frontend
@@ -49,99 +50,52 @@ npm install
 npm run dev
 ```
 
-`http://localhost:5173` — giriş backend’e gider; ürün listesi DummyJSON’dan gelir.
+`http://localhost:5173` — giriş, ürün listesi, sepet, checkout ve admin panel backend'e bağlıdır.
 
-Login sırasında backend `refreshToken` da döner ve frontend onu `localStorage`’a (`shopapi-refresh-token`) kaydeder.
+Demo giriş: `admin@admin.local` / `Admin123!`
 
-## Yapılandırma (`ShopAPI.API/appsettings.json`)
+## Yapılandırma
+
+Geliştirme için `appsettings.Development.json` kullanılır. Üretimde secret'ları ortam değişkeni ile verin (örnek: `.env.example`).
 
 | Bölüm | Açıklama |
 |--------|----------|
-| `ConnectionStrings:DefaultConnection` | SQLite: `Data Source=shopapi.db` veya PostgreSQL: `Host=...` |
-| `Jwt` | Issuer, audience, key, access/refresh süreleri |
-| `Redis:Enabled` | `true` → Redis; `false` → bellek içi cache |
-| `Redis:ConnectionString` | Örn. `localhost:6379` |
-| `RateLimiting` | Pencere ve istek limiti |
-| `StockAlert` | Arka plan işi eşiği ve aralık |
-| `Payments` | `Provider` (`mock` veya `stripe`) ve webhook secret |
-| `Stripe` | `SecretKey`, `FrontendUrl` (ödeme dönüş adresi) |
-| `Serilog` | Minimum seviye vb. |
+| `ConnectionStrings:DefaultConnection` | SQLite veya PostgreSQL |
+| `Jwt:Key` | JWT imza anahtarı (zorunlu) |
+| `Payments:Provider` | `mock` veya `stripe` |
+| `Stripe:SecretKey` | Stripe test/live secret |
+| `Stripe:WebhookSecret` | Stripe webhook imza doğrulama |
+| `Stripe:FrontendUrl` | Ödeme dönüş adresi |
 
-Stripe Checkout (kart ekranı) için:
-
-```json
-"Payments": {
-  "Provider": "stripe"
-},
-"Stripe": {
-  "SecretKey": "sk_test_...",
-  "FrontendUrl": "http://localhost:5173"
-}
+```powershell
+$env:Jwt__Key="your-secret-min-32-chars"
+$env:Stripe__SecretKey="sk_test_..."
+dotnet run --project ShopAPI.API
 ```
 
-Akış: `POST /api/orders` → `POST /api/orders/{id}/pay` → Stripe Checkout sayfasına yönlendirme → dönüşte `POST /api/orders/{id}/confirm-payment?sessionId=...`
+## Ödeme akışı
 
-Mock modda (`Provider: mock`) ödeme ekranı açılmaz; sipariş anında tamamlanır.
+**Mock:** `POST /api/orders` → `POST /api/orders/{id}/pay` → anında `Paid`
 
-## Seed veriler
+**Stripe Checkout:** aynı akış → `checkoutUrl` ile Stripe sayfasına yönlendirme → dönüşte `POST /api/orders/{id}/confirm-payment`
 
-İlk açılışta `EnsureCreated` + seed:
-
-- Kategoriler: Electronics, Gaming, Home
-- Örnek ürünler
-- Admin: `admin@admin.local` / `Admin123!`
+**Stripe Webhook:** `POST /api/payments/stripe-webhook` (imza doğrulamalı)
 
 ## API özeti
 
-### Kimlik
-
-| Metot | Yol | Açıklama |
-|--------|-----|----------|
-| POST | `/api/auth/register` | Kayıt |
-| POST | `/api/auth/login` | JWT + refresh token |
-| POST | `/api/auth/refresh` | Body: `{ "refreshToken": "..." }` |
-| POST | `/api/auth/revoke` | Refresh token iptal (Authorize) |
-
-Login/register yanıtı: `token`, `refreshToken`, `email`, `role`, `expiresAt`.
-
-### Diğer
-
-- `api/categories`, `api/products` (arama, filtre, sıralama, sayfalama)
-- `api/cart`, `api/orders`
-- `GET /api/admin/audit-logs` — yalnızca Admin rolü
-- `POST /api/orders/{id}/pay` — mock: anında ödeme; stripe: `checkoutUrl` döner
-- `POST /api/orders/{id}/confirm-payment` — Stripe dönüşünde ödemeyi doğrular
-- `POST /api/orders/{id}/cancel` — kullanıcı sipariş iptali
-- `api/addresses` — kullanıcı adres CRUD
-- `api/coupons` — kupon doğrulama/yönetim
-- `api/products/{id}/variants` — SKU/varyant yönetimi
-
-### Profesyonel özellikler
-
-- **Rate limiting:** Tüm API’ye sabit pencere limiti (`Program.cs`)
-- **Cache:** Ürün listesi `ProductCacheService` ile önbelleklenir
-- **Audit log:** `SaveChanges` öncesi değişiklikler `AuditLogs` tablosuna yazılır
-- **Stok alarmı:** `StockAlertBackgroundService` eşik altı stokları Serilog ile yazar
-- **Global hata:** Exception middleware
-- **Sipariş akışı:** `Pending -> Paid -> Shipped / Cancelled`
-- **Ödeme provider seçimi:** `MockPaymentGateway` veya `StripePaymentGateway`
-- **Checkout:** adres + kargo metodu + kupon kodu ile sipariş oluşturma
-- **DTO response modeli:** ürün, sepet ve sipariş yanıtları entity yerine DTO döner
-
-## Migration komutları
-
-```powershell
-dotnet ef migrations add <Name> --project ShopAPI.Infrastructure --startup-project ShopAPI.API --output-dir Persistence/Migrations
-dotnet ef database update --project ShopAPI.Infrastructure --startup-project ShopAPI.API
-```
-
-Uygulama başlangıcında otomatik olarak `Database.Migrate()` çalışır.
+- `api/auth`, `api/products`, `api/cart`, `api/orders`, `api/addresses`, `api/coupons`
+- `GET /api/orders` — admin sipariş listesi
+- `PATCH /api/orders/{id}/status` — admin durum güncelleme
+- `GET /api/admin/audit-logs` — audit log
+- `GET /health` — sağlık kontrolü
 
 ## Testler
 
 ```powershell
 dotnet test ShopAPI.Tests/ShopAPI.Tests.csproj -c Release
 ```
+
+Integration testler: sipariş oluştur → öde → iptal et (stok iadesi dahil).
 
 ## Docker
 
@@ -155,10 +109,10 @@ docker compose up --build
 
 ## CI/CD
 
-`.github/workflows/ci.yml` — `main`/`master` push ve PR’da restore, Release build, test.
+`.github/workflows/ci.yml` — backend test, frontend build, docker image build.
 
 ## Güvenlik notu
 
-Üretimde `Jwt:Key`, connection string ve Redis şifrelerini ortam değişkeni veya secret store ile verin; repodaki örnek değerleri kullanmayın.
+Üretimde `Jwt:Key`, Stripe secret'ları ve connection string'leri repoya yazmayın; ortam değişkeni veya secret store kullanın.
 
-_Last updated: 2026-06-02_
+_Last updated: 2026-06-05_

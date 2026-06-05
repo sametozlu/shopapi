@@ -9,6 +9,8 @@ obj/
 
 # SQLite/local
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 
 # Node/Frontend

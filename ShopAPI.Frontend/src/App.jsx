@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, Navigate, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom'
-import { LANG_KEY, formatPrice, i18n } from './i18n'
+import { LANG_KEY, formatPrice, i18n, orderStatusLabel } from './i18n'
 import { localizeCategory, localizeProducts } from './productLocale'
 
 const API_BASE = 'http://localhost:5095'
 const TOKEN_KEY = 'shopapi-auth-token'
 const REFRESH_TOKEN_KEY = 'shopapi-refresh-token'
+const ROLE_KEY = 'shopapi-user-role'
 
 function App() {
   const [lang, setLang] = useState(() => localStorage.getItem(LANG_KEY) ?? 'tr')
   const [token, setToken] = useState(localStorage.getItem(TOKEN_KEY) ?? '')
+  const [role, setRole] = useState(localStorage.getItem(ROLE_KEY) ?? '')
   const [bootstrapping, setBootstrapping] = useState(true)
   const t = i18n[lang]
 
@@ -18,16 +20,22 @@ function App() {
     localStorage.setItem(LANG_KEY, next)
   }
 
-  function onLogin(newToken, refreshToken) {
+  function onLogin(newToken, refreshToken, userRole) {
     setToken(newToken)
     localStorage.setItem(TOKEN_KEY, newToken)
     if (refreshToken) localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken)
+    if (userRole) {
+      setRole(userRole)
+      localStorage.setItem(ROLE_KEY, userRole)
+    }
   }
 
   function onLogout() {
     setToken('')
+    setRole('')
     localStorage.removeItem(TOKEN_KEY)
     localStorage.removeItem(REFRESH_TOKEN_KEY)
+    localStorage.removeItem(ROLE_KEY)
   }
 
   useEffect(() => {
@@ -51,7 +59,7 @@ function App() {
         })
         if (!response.ok) throw new Error('refresh failed')
         const data = await response.json()
-        onLogin(data.token, data.refreshToken)
+        onLogin(data.token, data.refreshToken, data.role)
       } catch {
         onLogout()
       } finally {
@@ -82,7 +90,27 @@ function App() {
         path="/"
         element={
           token ? (
-            <StorePage lang={lang} setLang={changeLang} t={t} token={token} onLogin={onLogin} onLogout={onLogout} />
+            <StorePage
+              lang={lang}
+              setLang={changeLang}
+              t={t}
+              token={token}
+              role={role}
+              onLogin={onLogin}
+              onLogout={onLogout}
+            />
+          ) : (
+            <Navigate to="/login" replace />
+          )
+        }
+      />
+      <Route
+        path="/admin"
+        element={
+          token && role === 'Admin' ? (
+            <AdminPage lang={lang} setLang={changeLang} t={t} token={token} onLogin={onLogin} onLogout={onLogout} />
+          ) : token ? (
+            <Navigate to="/" replace />
           ) : (
             <Navigate to="/login" replace />
           )
@@ -124,7 +152,7 @@ function LoginPage({ lang, setLang, t, onLogin }) {
       })
       if (!response.ok) throw new Error('fail')
       const data = await response.json()
-      onLogin(data.token, data.refreshToken)
+      onLogin(data.token, data.refreshToken, data.role)
       navigate('/', { replace: true })
     } catch {
       setError(t.loginError)
@@ -163,6 +191,12 @@ function LoginPage({ lang, setLang, t, onLogin }) {
 }
 
 function mapApiProduct(product) {
+  const variants = (product.variants ?? []).map((v) => ({
+    id: v.id,
+    name: v.name,
+    price: Number(v.overridePrice ?? product.price ?? 0),
+    stock: v.stock ?? 0,
+  }))
   return {
     id: product.id,
     title: product.name,
@@ -172,8 +206,13 @@ function mapApiProduct(product) {
     price: Number(product.price ?? 0),
     rating: Number((4.2 + ((product.stock ?? 0) % 8) / 10).toFixed(1)),
     stock: product.stock ?? 0,
+    variants,
     thumbnail: `https://picsum.photos/seed/${product.id}/480/320`,
   }
+}
+
+function cartItemUnitPrice(item) {
+  return Number(item.productVariant?.overridePrice ?? item.product?.price ?? 0)
 }
 
 async function apiFetch(path, { method = 'GET', token, body, onLogin, onLogout } = {}) {
@@ -200,7 +239,7 @@ async function apiFetch(path, { method = 'GET', token, body, onLogin, onLogout }
     if (!refreshResponse.ok) throw new Error('refresh failed')
 
     const refreshData = await refreshResponse.json()
-    onLogin(refreshData.token, refreshData.refreshToken)
+    onLogin(refreshData.token, refreshData.refreshToken, refreshData.role)
     response = await call(refreshData.token)
     return response
   } catch {
@@ -209,7 +248,7 @@ async function apiFetch(path, { method = 'GET', token, body, onLogin, onLogout }
   }
 }
 
-function StorePage({ lang, setLang, t, token, onLogin, onLogout }) {
+function StorePage({ lang, setLang, t, token, role, onLogin, onLogout }) {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const [rawProducts, setRawProducts] = useState([])
@@ -226,6 +265,8 @@ function StorePage({ lang, setLang, t, token, onLogin, onLogout }) {
   const [completedOrderId, setCompletedOrderId] = useState(null)
   const [cartItems, setCartItems] = useState([])
   const [addresses, setAddresses] = useState([])
+  const [couponCode, setCouponCode] = useState('WELCOME10')
+  const [selectedVariants, setSelectedVariants] = useState({})
 
   useEffect(() => {
     async function fetchProductsAndCart() {
@@ -342,7 +383,7 @@ function StorePage({ lang, setLang, t, token, onLogin, onLogout }) {
   }, [displayProducts, searchText, selectedCategory, sort])
 
   const cartCount = cartItems.reduce((sum, item) => sum + item.quantity, 0)
-  const cartTotal = cartItems.reduce((sum, item) => sum + item.quantity * Number(item.product?.price ?? 0), 0)
+  const cartTotal = cartItems.reduce((sum, item) => sum + item.quantity * cartItemUnitPrice(item), 0)
 
   async function reloadCart() {
     const response = await apiFetch('/api/cart', { token, onLogin, onLogout })
@@ -350,12 +391,12 @@ function StorePage({ lang, setLang, t, token, onLogin, onLogout }) {
     setCartItems(await response.json())
   }
 
-  async function addToCart(productId) {
+  async function addToCart(productId, productVariantId = null) {
     dismissOrderSuccess()
     const response = await apiFetch('/api/cart/items', {
       method: 'POST',
       token,
-      body: { productId, quantity: 1 },
+      body: { productId, productVariantId, quantity: 1 },
       onLogin,
       onLogout,
     })
@@ -424,7 +465,7 @@ function StorePage({ lang, setLang, t, token, onLogin, onLogout }) {
         body: {
           shippingAddressId: selectedAddress.id,
           shippingMethod: 0,
-          couponCode: 'WELCOME10',
+          couponCode: couponCode.trim() || null,
         },
         onLogin,
         onLogout,
@@ -501,6 +542,11 @@ function StorePage({ lang, setLang, t, token, onLogin, onLogout }) {
           <span className="cart-pill">
             {t.cart} <strong>{cartCount}</strong>
           </span>
+          {role === 'Admin' && (
+            <Link className="btn-ghost" to="/admin">
+              {t.admin}
+            </Link>
+          )}
           <button type="button" className="btn-ghost" onClick={logout}>
             {t.logout}
           </button>
@@ -554,14 +600,46 @@ function StorePage({ lang, setLang, t, token, onLogin, onLogout }) {
                   <p className="category">{product.displayCategory ?? product.categoryName ?? product.category}</p>
                   <h3>{product.displayTitle ?? product.title}</h3>
                   <p className="desc">{product.displayDescription ?? product.description}</p>
+                  {product.variants?.length > 0 && (
+                    <label className="variant-select">
+                      {t.variantLabel}
+                      <select
+                        value={selectedVariants[product.id] ?? ''}
+                        onChange={(e) =>
+                          setSelectedVariants((prev) => ({
+                            ...prev,
+                            [product.id]: e.target.value || null,
+                          }))
+                        }
+                      >
+                        <option value="">{t.noVariant}</option>
+                        {product.variants.map((variant) => (
+                          <option key={variant.id} value={variant.id}>
+                            {variant.name} — {formatPrice(variant.price, lang)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
                   <div className="meta">
-                    <strong>{formatPrice(product.price, lang)}</strong>
+                    <strong>
+                      {formatPrice(
+                        product.variants?.length && selectedVariants[product.id]
+                          ? product.variants.find((v) => v.id === selectedVariants[product.id])?.price ?? product.price
+                          : product.price,
+                        lang
+                      )}
+                    </strong>
                     <span>
                       ★ {product.rating} {t.ratingLabel}
                     </span>
                   </div>
                 </div>
-                <button type="button" className="btn-primary" onClick={() => addToCart(product.id)}>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => addToCart(product.id, selectedVariants[product.id] || null)}
+                >
                   {t.addToCart}
                 </button>
               </article>
@@ -586,9 +664,12 @@ function StorePage({ lang, setLang, t, token, onLogin, onLogout }) {
             {cartItems.map((item) => (
               <li key={item.productId}>
                 <div>
-                  <strong>{item.product?.name}</strong>
+                  <strong>
+                    {item.product?.name}
+                    {item.productVariant?.name ? ` (${item.productVariant.name})` : ''}
+                  </strong>
                   <p>
-                    {formatPrice(Number(item.product?.price ?? 0), lang)} × {item.quantity}
+                    {formatPrice(cartItemUnitPrice(item), lang)} × {item.quantity}
                   </p>
                 </div>
                 <div className="qty">
@@ -604,10 +685,20 @@ function StorePage({ lang, setLang, t, token, onLogin, onLogout }) {
             ))}
           </ul>
           {cartItems.length > 0 && (
-            <div className="checkout">
-              <p>{t.total}</p>
-              <strong>{formatPrice(cartTotal, lang)}</strong>
-            </div>
+            <>
+              <label className="coupon-field">
+                {t.couponLabel}
+                <input
+                  value={couponCode}
+                  onChange={(e) => setCouponCode(e.target.value)}
+                  placeholder={t.couponPlaceholder}
+                />
+              </label>
+              <div className="checkout">
+                <p>{t.total}</p>
+                <strong>{formatPrice(cartTotal, lang)}</strong>
+              </div>
+            </>
           )}
           {!!orderMessage && <p className="message error">{orderMessage}</p>}
           <button
@@ -628,6 +719,146 @@ function StorePage({ lang, setLang, t, token, onLogin, onLogout }) {
           </button>
         </aside>
       </main>
+    </div>
+  )
+}
+
+function AdminPage({ lang, setLang, t, token, onLogin, onLogout }) {
+  const navigate = useNavigate()
+  const [orders, setOrders] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [busyId, setBusyId] = useState(null)
+
+  async function loadOrders() {
+    setLoading(true)
+    setError('')
+    try {
+      const response = await apiFetch('/api/orders', { token, onLogin, onLogout })
+      if (!response.ok) throw new Error('load failed')
+      setOrders(await response.json())
+    } catch {
+      setError(t.loadError)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadOrders()
+  }, [token])
+
+  async function updateStatus(orderId, status) {
+    setBusyId(orderId)
+    try {
+      const response = await apiFetch(`/api/orders/${orderId}/status?status=${status}`, {
+        method: 'PATCH',
+        token,
+        onLogin,
+        onLogout,
+      })
+      if (!response.ok) throw new Error('update failed')
+      await loadOrders()
+    } catch {
+      setError(t.cartActionError)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function cancelOrder(orderId) {
+    setBusyId(orderId)
+    try {
+      const response = await apiFetch(`/api/orders/${orderId}/admin/cancel`, {
+        method: 'POST',
+        token,
+        onLogin,
+        onLogout,
+      })
+      if (!response.ok) throw new Error('cancel failed')
+      await loadOrders()
+    } catch {
+      setError(t.cartActionError)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  return (
+    <div className="store-page admin-page">
+      <header className="store-nav">
+        <Link className="logo" to="/">
+          <span className="logo-mark">N</span>
+          {t.brand}
+        </Link>
+        <div className="nav-right">
+          <LanguageToggle lang={lang} setLang={setLang} />
+          <Link className="btn-ghost" to="/">
+            {t.shop}
+          </Link>
+        </div>
+      </header>
+
+      <section className="admin-panel">
+        <div className="admin-head">
+          <h1>{t.adminTitle}</h1>
+          <button type="button" className="btn-secondary" onClick={loadOrders}>
+            {t.adminRefresh}
+          </button>
+        </div>
+        {loading && <p className="message">{t.loading}</p>}
+        {error && <p className="message error">{error}</p>}
+        {!loading && orders.length === 0 && <p className="muted">{t.adminEmpty}</p>}
+        <div className="admin-table-wrap">
+          <table className="admin-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>{t.adminStatus}</th>
+                <th>{t.adminTotal}</th>
+                <th>{t.adminDate}</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {orders.map((order) => (
+                <tr key={order.id}>
+                  <td>{String(order.id).slice(0, 8)}…</td>
+                  <td>
+                    <span className={`status-pill status-${order.status}`}>
+                      {orderStatusLabel(order.status, t)}
+                    </span>
+                  </td>
+                  <td>{formatPrice(order.totalAmount, lang)}</td>
+                  <td>{new Date(order.createdAt).toLocaleString(lang === 'tr' ? 'tr-TR' : 'en-US')}</td>
+                  <td className="admin-actions">
+                    {order.status === 1 && (
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        disabled={busyId === order.id}
+                        onClick={() => updateStatus(order.id, 2)}
+                      >
+                        {t.adminShip}
+                      </button>
+                    )}
+                    {order.status !== 3 && order.status !== 2 && (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        disabled={busyId === order.id}
+                        onClick={() => cancelOrder(order.id)}
+                      >
+                        {t.adminCancel}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   )
 }

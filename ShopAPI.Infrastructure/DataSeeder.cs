@@ -71,8 +71,9 @@ public static class DataSeeder
         var skuSet = variantSkus.ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var product in allProducts.Take(8))
         {
-            var skuA = $"{product.Name[..Math.Min(3, product.Name.Length)].ToUpperInvariant()}-STD";
-            var skuB = $"{product.Name[..Math.Min(3, product.Name.Length)].ToUpperInvariant()}-PRO";
+            var skuPrefix = product.Id.ToString("N")[..8].ToUpperInvariant();
+            var skuA = $"{skuPrefix}-STD";
+            var skuB = $"{skuPrefix}-PRO";
             if (!skuSet.Contains(skuA))
             {
                 dbContext.ProductVariants.Add(new ProductVariant

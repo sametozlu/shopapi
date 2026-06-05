@@ -121,6 +121,7 @@ public interface IOrderService
     Task<List<OrderDto>> GetAllOrdersAsync();
     Task<PaymentStartResponse?> PayOrderAsync(Guid userId, Guid orderId);
     Task<OrderDto?> ConfirmPaymentAsync(Guid userId, Guid orderId, string sessionId);
+    Task<OrderDto?> ConfirmStripeWebhookAsync(string sessionId);
     Task<OrderDto?> HandlePaymentWebhookAsync(PaymentWebhookRequest request);
     Task<OrderDto?> CancelOrderAsync(Guid userId, Guid orderId, bool isAdmin);
     Task<OrderDto?> UpdateStatusAsync(Guid orderId, OrderStatus status);
