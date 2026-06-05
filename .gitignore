@@ -11,11 +11,14 @@ obj/
 *.db
 *.db-shm
 *.db-wal
+shopapi-e2e.db*
 *.sqlite
 
 # Node/Frontend
 node_modules/
 dist/
+test-results/
+playwright-report/
 build/
 .turbo/
 .next/

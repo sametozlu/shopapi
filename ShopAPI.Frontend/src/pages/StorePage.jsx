@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import LanguageToggle from '../components/LanguageToggle'
+import PaymentModal from '../components/PaymentModal'
 import { formatPrice } from '../i18n'
 import { apiFetch } from '../lib/api'
 import { cartItemUnitPrice, mapApiProduct } from '../lib/productUtils'
@@ -25,6 +26,8 @@ export default function StorePage({ lang, setLang, t, token, role, onLogin, onLo
   const [addresses, setAddresses] = useState([])
   const [couponCode, setCouponCode] = useState('WELCOME10')
   const [selectedVariants, setSelectedVariants] = useState({})
+  const [pendingPaymentOrder, setPendingPaymentOrder] = useState(null)
+  const [paymentProvider, setPaymentProvider] = useState('mock')
 
   useEffect(() => {
     async function fetchProductsAndCart() {
@@ -56,6 +59,20 @@ export default function StorePage({ lang, setLang, t, token, role, onLogin, onLo
     }
     fetchProductsAndCart()
   }, [token, lang])
+
+  useEffect(() => {
+    async function loadPaymentSettings() {
+      try {
+        const response = await apiFetch('/api/payments/settings', { token, onLogin, onLogout })
+        if (!response.ok) return
+        const data = await response.json()
+        if (data.provider) setPaymentProvider(data.provider)
+      } catch {
+        /* keep mock default */
+      }
+    }
+    loadPaymentSettings()
+  }, [token])
 
   useEffect(() => {
     const paymentStatus = searchParams.get('payment')
@@ -205,8 +222,46 @@ export default function StorePage({ lang, setLang, t, token, role, onLogin, onLo
     await reloadCart()
   }
 
+  async function finalizeOrder(orderId) {
+    setCompletedOrderId(orderId)
+    setPendingPaymentOrder(null)
+    await Promise.all([
+      reloadCart(),
+      (async () => {
+        const productsResponse = await apiFetch('/api/products?page=1&pageSize=100&isActive=true', {
+          token,
+          onLogin,
+          onLogout,
+        })
+        if (productsResponse.ok) {
+          const productsData = await productsResponse.json()
+          setRawProducts((productsData.items ?? []).map(mapApiProduct))
+        }
+      })(),
+    ])
+  }
+
+  async function payWithStripe(order) {
+    const payResponse = await apiFetch(`/api/orders/${order.id}/pay`, {
+      method: 'POST',
+      token,
+      onLogin,
+      onLogout,
+    })
+    if (!payResponse.ok) {
+      const errBody = await payResponse.json().catch(() => ({}))
+      throw new Error(errBody.message ?? 'pay order failed')
+    }
+    const payResult = await payResponse.json()
+    if (payResult.mode === 'stripe_checkout' && payResult.checkoutUrl) {
+      window.location.href = payResult.checkoutUrl
+      return
+    }
+    await finalizeOrder(order.id)
+  }
+
   async function checkout() {
-    if (checkoutBusy || !cartItems.length) return
+    if (checkoutBusy || !cartItems.length || pendingPaymentOrder) return
     setOrderMessage('')
     setCompletedOrderId(null)
     setCheckoutBusy(true)
@@ -229,50 +284,40 @@ export default function StorePage({ lang, setLang, t, token, role, onLogin, onLo
       })
       if (!createResponse.ok) throw new Error('create order failed')
       const order = await createResponse.json()
+      await reloadCart()
 
-      const payResponse = await apiFetch(`/api/orders/${order.id}/pay`, {
-        method: 'POST',
-        token,
-        onLogin,
-        onLogout,
-      })
-      if (!payResponse.ok) {
-        const errBody = await payResponse.json().catch(() => ({}))
-        throw new Error(errBody.message ?? 'pay order failed')
-      }
-      const payResult = await payResponse.json()
-
-      if (payResult.mode === 'stripe_checkout' && payResult.checkoutUrl) {
-        window.location.href = payResult.checkoutUrl
+      if (paymentProvider === 'stripe') {
+        await payWithStripe(order)
         return
       }
 
-      setCompletedOrderId(order.id)
-      await Promise.all([
-        reloadCart(),
-        (async () => {
-          const productsResponse = await apiFetch('/api/products?page=1&pageSize=100&isActive=true', {
-            token,
-            onLogin,
-            onLogout,
-          })
-          if (productsResponse.ok) {
-            const productsData = await productsResponse.json()
-            setRawProducts((productsData.items ?? []).map(mapApiProduct))
-          }
-        })(),
-      ])
+      setPendingPaymentOrder(order)
     } catch {
       setOrderMessage(t.checkoutError)
       setCompletedOrderId(null)
+      setPendingPaymentOrder(null)
     } finally {
       setCheckoutBusy(false)
     }
   }
 
+  async function handlePaymentSuccess(orderId) {
+    try {
+      await finalizeOrder(orderId)
+    } catch {
+      setOrderMessage(t.checkoutError)
+    }
+  }
+
+  function cancelPayment() {
+    setPendingPaymentOrder(null)
+    setOrderMessage(t.paymentCancelled)
+  }
+
   function dismissOrderSuccess() {
     setCompletedOrderId(null)
     setOrderMessage('')
+    setPendingPaymentOrder(null)
   }
 
   function logout() {
@@ -408,10 +453,15 @@ export default function StorePage({ lang, setLang, t, token, role, onLogin, onLo
         <aside className="cart-panel">
           <h2>{t.cart}</h2>
           {completedOrderId ? (
-            <div className="order-success" role="status">
+            <div className="order-success" role="status" data-testid="order-success">
               <p className="order-success-title">{t.checkoutSuccess(completedOrderId)}</p>
               <p className="muted">{t.cartAfterOrder}</p>
-              <button type="button" className="btn-ghost order-success-dismiss" onClick={dismissOrderSuccess}>
+              <button
+                type="button"
+                className="btn-ghost order-success-dismiss"
+                data-testid="order-success-dismiss"
+                onClick={dismissOrderSuccess}
+              >
                 {t.dismissOk}
               </button>
             </div>
@@ -464,7 +514,7 @@ export default function StorePage({ lang, setLang, t, token, role, onLogin, onLo
             className="btn-primary"
             data-testid="checkout-btn"
             onClick={checkout}
-            disabled={!cartItems.length || checkoutBusy || !!completedOrderId}
+            disabled={!cartItems.length || checkoutBusy || !!completedOrderId || !!pendingPaymentOrder}
           >
             {checkoutBusy ? t.checkoutProcessing : t.checkout}
           </button>
@@ -478,6 +528,20 @@ export default function StorePage({ lang, setLang, t, token, role, onLogin, onLo
           </button>
         </aside>
       </main>
+
+      <PaymentModal
+        open={!!pendingPaymentOrder}
+        order={pendingPaymentOrder}
+        total={pendingPaymentOrder?.totalAmount ?? cartTotal}
+        t={t}
+        lang={lang}
+        token={token}
+        onLogin={onLogin}
+        onLogout={onLogout}
+        formatPrice={formatPrice}
+        onSuccess={handlePaymentSuccess}
+        onCancel={cancelPayment}
+      />
     </div>
   )
 }

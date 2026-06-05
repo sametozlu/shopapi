@@ -16,6 +16,10 @@ public class PaymentsController : ControllerBase
         _configuration = configuration;
     }
 
+    [HttpGet("settings")]
+    public IActionResult Settings() =>
+        Ok(new { provider = _configuration["Payments:Provider"]?.ToLowerInvariant() ?? "mock" });
+
     [HttpPost("webhook")]
     public async Task<IActionResult> Webhook([FromBody] PaymentWebhookRequest request, [FromHeader(Name = "X-Webhook-Secret")] string? secret)
     {

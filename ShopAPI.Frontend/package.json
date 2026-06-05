@@ -8,7 +8,8 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:live": "playwright test e2e/checkout-flow.spec.js --headed -c playwright.live.config.js"
   },
   "dependencies": {
     "react": "^19.2.6",
